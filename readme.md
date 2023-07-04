@@ -26,7 +26,7 @@ With Node.js installed, follow these steps:
 
 1. Clone the repository:
    ```
-   git clone https://github.com/your-repo/css-extractor.git
+   git clone https://github.com/dennerparreiras/css-extractor.git
    ```
 2. Navigate into the project directory:
    ```
