@@ -3,7 +3,7 @@ import path from 'path';
 import { parse, stringify } from 'css';
 
 /**
- * Processes CSS files to filter out irrelevant CSS rules based on class names, ids and tags from the HTML.
+ * Processes CSS files to filter out irrelevant CSS rules based on class names, ids, tags, @media, @font-face, *, and variable declarations.
  * It also removes all data-v attributes from the CSS.
  * @param {string} inputDir - The input directory path.
  * @param {string} outputDir - The output directory path.
@@ -24,29 +24,67 @@ export async function processCSS(inputDir, outputDir, cssFile, classNames, ids, 
     // Parse the CSS into an Abstract Syntax Tree (AST)
     const cssAst = parse(cleanedCssContent);
 
-    // Filter out irrelevant CSS rules
-    // This is done by iterating over each rule in the CSS AST
-    // For each rule, the function checks if the rule's selectors match any of the class names, ids, or tags from the HTML
-    // If a match is found, the rule is considered relevant and is kept
-    // If no match is found, the rule is considered irrelevant and is removed
-    cssAst.stylesheet.rules = cssAst.stylesheet.rules.filter((rule) => {
-        if (rule.type !== 'rule') return false;
-        const selectors = rule.selectors;
-        for (let selector of selectors) {
-            selector = selector.replace(/::after|::before|:hover|:active|:focus/g, '');
-            const classesInSelector = selector.match(/\.[\w-]*/g) || [];
-            const idsInSelector = selector.match(/#[\w-]*/g) || [];
-            const tagsInSelector = selector.match(/[\w-]*/g) || [];
-            if (classesInSelector.some(cls => classNames.includes(cls.substring(1)))) return true;
-            if (idsInSelector.some(id => ids.includes(id.substring(1)))) return true;
-            if (tagsInSelector.some(tag => tags.includes(tag))) return true;
+    // Separate rules into three groups: @font-face/@media, universal, and others
+    const fontFaceMediaRules = [];
+    const universalRules = [];
+    const otherRules = [];
+
+    cssAst.stylesheet.rules.forEach((rule) => {
+        if (rule.type === 'font-face' || rule.type === 'media' || rule.selectors.includes('@')) {
+            // @font-face, @media, or other rules starting with @
+            if (!isDuplicateRule(rule, fontFaceMediaRules)) {
+                fontFaceMediaRules.push(rule);
+            }
+        } else if (rule.type === 'rule' && rule.selectors.includes('*')) {
+            // Universal rule
+            if (!isDuplicateRule(rule, universalRules)) {
+                universalRules.push(rule);
+            }
+        } else {
+            // Other rule
+            if (!isDuplicateRule(rule, otherRules)) {
+                otherRules.push(rule);
+            }
+        }
+    });
+
+    // Filter out irrelevant CSS rules from otherRules
+    const relevantOtherRules = otherRules.filter((rule) => {
+        if (rule.type === 'rule') {
+            // Check if the rule contains class names, ids, or tags from the HTML
+            const selectors = rule.selectors;
+            for (let selector of selectors) {
+                selector = selector.replace(/::after|::before|:hover|:active|:focus/g, '');
+                const classesInSelector = selector.match(/\.[\w-]*/g) || [];
+                const idsInSelector = selector.match(/#[\w-]*/g) || [];
+                const tagsInSelector = selector.match(/[\w-]*/g) || [];
+                if (classesInSelector.some(cls => classNames.includes(cls.substring(1)))) return true;
+                if (idsInSelector.some(id => ids.includes(id.substring(1)))) return true;
+                if (tagsInSelector.some(tag => tags.includes(tag))) return true;
+            }
+            return false;
+        } else if (
+            rule.type === 'media' ||
+            rule.type === 'font-face' ||
+            rule.declarations.some(declaration => declaration.property.startsWith('--'))
+        ) {
+            // Keep @media, @font-face, and variable declaration rules
+            return true;
         }
         return false;
     });
 
+    // Combine the three groups of rules in the specified order, removing duplicates
+    const combinedRules = [...fontFaceMediaRules, ...universalRules, ...relevantOtherRules].filter((rule, index, self) => {
+        return !self.slice(index + 1).some(otherRule => JSON.stringify(otherRule) === JSON.stringify(rule));
+    });
+
+    // Update the rules in the CSS AST
+    cssAst.stylesheet.rules = combinedRules;
+
     // Convert the CSS AST back into a string and return it
-    const relevantCss = stringify(cssAst);
-    return relevantCss;
+    const processedCss = stringify(cssAst);
+    return processedCss;
 }
 
 /**
@@ -56,4 +94,15 @@ export async function processCSS(inputDir, outputDir, cssFile, classNames, ids, 
  */
 function removeDataAttributes(css) {
     return css.replace(/\[data-v-[\w\d]+\]/g, '');
+}
+
+/**
+ * Checks if a rule is a duplicate of any rule in the given rule list.
+ * @param {Object} rule - The CSS rule object to check.
+ * @param {Array} ruleList - The list of CSS rules to compare against.
+ * @returns {boolean} - True if the rule is a duplicate, false otherwise.
+ */
+function isDuplicateRule(rule, ruleList) {
+    const ruleString = JSON.stringify(rule);
+    return ruleList.some(existingRule => JSON.stringify(existingRule) === ruleString);
 }
